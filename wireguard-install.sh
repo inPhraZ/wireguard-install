@@ -41,6 +41,7 @@ function checkOS() {
 		source /etc/os-release
 		OS="${ID}"
 	elif [[ -e /etc/centos-release ]]; then
+		source /etc/os-release
 		OS=centos
 	elif [[ -e /etc/arch-release ]]; then
 		OS=arch
@@ -137,9 +138,11 @@ function installWireGuard() {
 		fi
 		dnf install -y wireguard-tools iptables qrencode
 	elif [[ ${OS} == 'centos' ]]; then
-		curl -Lo /etc/yum.repos.d/wireguard.repo https://copr.fedorainfracloud.org/coprs/jdoss/wireguard/repo/epel-7/jdoss-wireguard-epel-7.repo
-		yum -y install epel-release kernel kernel-devel kernel-headers
-		yum -y install wireguard-dkms wireguard-tools iptables qrencode
+		yum -y install epel-release elrepo-release
+		if [[ ${VERSION_ID} -eq 7 ]]; then
+			yum -y install yum-plugin-elrepo
+		fi
+		yum -y install kmod-wireguard wireguard-tools iptables qrencode
 	elif [[ ${OS} == 'arch' ]]; then
 		# Check if current running kernel is LTS
 		ARCH_KERNEL_RELEASE=$(uname -r)
@@ -183,8 +186,8 @@ PrivateKey = ${SERVER_PRIV_KEY}" >"/etc/wireguard/${SERVER_WG_NIC}.conf"
 		echo "PostUp = firewall-cmd --add-port ${SERVER_PORT}/udp && firewall-cmd --add-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade' && firewall-cmd --add-rich-rule='rule family=ipv6 source address=${FIREWALLD_IPV6_ADDRESS}/24 masquerade'
 PostDown = firewall-cmd --remove-port ${SERVER_PORT}/udp && firewall-cmd --remove-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade' && firewall-cmd --remove-rich-rule='rule family=ipv6 source address=${FIREWALLD_IPV6_ADDRESS}/24 masquerade'" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
 	else
-		echo "PostUp = iptables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; ip6tables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
-PostDown = iptables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
+		echo "PostUp = iptables -A FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT; iptables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; ip6tables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
+PostDown = iptables -D FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT; iptables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
 	fi
 
 	# Enable routing on the server
@@ -358,8 +361,7 @@ function uninstallWg() {
 		fi
 		dnf autoremove -y
 	elif [[ ${OS} == 'centos' ]]; then
-		yum -y remove wireguard-dkms wireguard-tools qrencode
-		rm -f "/etc/yum.repos.d/wireguard.repo"
+		yum -y remove kmod-wireguard wireguard-tools qrencode
 		yum -y autoremove
 	elif [[ ${OS} == 'arch' ]]; then
 		pacman -Rs --noconfirm wireguard-tools qrencode
