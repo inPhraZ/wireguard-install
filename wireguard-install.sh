@@ -79,7 +79,7 @@ function installQuestions() {
 		read -rp "Public interface: " -e -i "${SERVER_NIC}" SERVER_PUB_NIC
 	done
 
-	until [[ ${SERVER_WG_NIC} =~ ^[a-zA-Z0-9_]+$ ]]; do
+	until [[ ${SERVER_WG_NIC} =~ ^[a-zA-Z0-9_]+$ && ${#SERVER_WG_NIC} -lt 16 ]]; do
 		read -rp "WireGuard interface name: " -e -i wg0 SERVER_WG_NIC
 	done
 
@@ -99,10 +99,10 @@ function installQuestions() {
 
 	# Adguard DNS by default
 	until [[ ${CLIENT_DNS_1} =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]; do
-		read -rp "First DNS resolver to use for the clients: " -e -i 176.103.130.130 CLIENT_DNS_1
+		read -rp "First DNS resolver to use for the clients: " -e -i 94.140.14.14 CLIENT_DNS_1
 	done
 	until [[ ${CLIENT_DNS_2} =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]; do
-		read -rp "Second DNS resolver to use for the clients (optional): " -e -i 176.103.130.131 CLIENT_DNS_2
+		read -rp "Second DNS resolver to use for the clients (optional): " -e -i 94.140.15.15 CLIENT_DNS_2
 		if [[ ${CLIENT_DNS_2} == "" ]]; then
 			CLIENT_DNS_2="${CLIENT_DNS_1}"
 		fi
@@ -147,11 +147,11 @@ function installWireGuard() {
 		# Check if current running kernel is LTS
 		ARCH_KERNEL_RELEASE=$(uname -r)
 		if [[ ${ARCH_KERNEL_RELEASE} == *lts* ]]; then
-			pacman -S --noconfirm linux-lts-headers
+			pacman -S --needed --noconfirm linux-lts-headers
 		else
-			pacman -S --noconfirm linux-headers
+			pacman -S --needed --noconfirm linux-headers
 		fi
-		pacman -S --noconfirm wireguard-tools iptables qrencode
+		pacman -S --needed --noconfirm wireguard-tools iptables qrencode
 	fi
 
 	# Make sure the directory exists (this does not seem the be the case on fedora)
@@ -219,9 +219,9 @@ function newClient() {
 
 	echo ""
 	echo "Tell me a name for the client."
-	echo "The name must consist of alphanumeric character. It may also include an underscore or a dash."
+	echo "The name must consist of alphanumeric character. It may also include an underscore or a dash and can't exceed 15 chars."
 
-	until [[ ${CLIENT_NAME} =~ ^[a-zA-Z0-9_-]+$ && ${CLIENT_EXISTS} == '0' ]]; do
+	until [[ ${CLIENT_NAME} =~ ^[a-zA-Z0-9_-]+$ && ${CLIENT_EXISTS} == '0' && ${#CLIENT_NAME} -lt 16 ]]; do
 		read -rp "Client name: " -e CLIENT_NAME
 		CLIENT_EXISTS=$(grep -c -E "^### Client ${CLIENT_NAME}\$" "/etc/wireguard/${SERVER_WG_NIC}.conf")
 
@@ -275,11 +275,19 @@ function newClient() {
 	CLIENT_PRE_SHARED_KEY=$(wg genpsk)
 
 	# Home directory of the user, where the client configuration will be written
-	if [ -e "/home/${CLIENT_NAME}" ]; then # if $1 is a user name
+	if [ -e "/home/${CLIENT_NAME}" ]; then
+		# if $1 is a user name
 		HOME_DIR="/home/${CLIENT_NAME}"
-	elif [ "${SUDO_USER}" ]; then # if not, use SUDO_USER
-		HOME_DIR="/home/${SUDO_USER}"
-	else # if not SUDO_USER, use /root
+	elif [ "${SUDO_USER}" ]; then
+		# if not, use SUDO_USER
+		if [ "${SUDO_USER}" == "root" ]; then
+			# If running sudo as root
+			HOME_DIR="/root"
+		else
+			HOME_DIR="/home/${SUDO_USER}"
+		fi
+	else
+		# if not SUDO_USER, use /root
 		HOME_DIR="/root"
 	fi
 
@@ -344,45 +352,52 @@ function revokeClient() {
 }
 
 function uninstallWg() {
-	checkOS
+	echo ""
+	read -rp "Do you really want to remove WireGuard? [y/n]: " -e -i n REMOVE
+	if [[ $REMOVE == 'y' ]]; then
+		checkOS
 
-	systemctl stop "wg-quick@${SERVER_WG_NIC}"
-	systemctl disable "wg-quick@${SERVER_WG_NIC}"
+		systemctl stop "wg-quick@${SERVER_WG_NIC}"
+		systemctl disable "wg-quick@${SERVER_WG_NIC}"
 
-	if [[ ${OS} == 'ubuntu' ]]; then
-		apt-get autoremove --purge -y wireguard qrencode
-	elif [[ ${OS} == 'debian' ]]; then
-		apt-get autoremove --purge -y wireguard qrencode
-	elif [[ ${OS} == 'fedora' ]]; then
-		dnf remove -y wireguard-tools qrencode
-		if [[ ${VERSION_ID} -lt 32 ]]; then
-			dnf remove -y wireguard-dkms
-			dnf copr disable -y jdoss/wireguard
+		if [[ ${OS} == 'ubuntu' ]]; then
+			apt-get autoremove --purge -y wireguard qrencode
+		elif [[ ${OS} == 'debian' ]]; then
+			apt-get autoremove --purge -y wireguard qrencode
+		elif [[ ${OS} == 'fedora' ]]; then
+			dnf remove -y wireguard-tools qrencode
+			if [[ ${VERSION_ID} -lt 32 ]]; then
+				dnf remove -y wireguard-dkms
+				dnf copr disable -y jdoss/wireguard
+			fi
+			dnf autoremove -y
+		elif [[ ${OS} == 'centos' ]]; then
+			yum -y remove kmod-wireguard wireguard-tools qrencode
+			yum -y autoremove
+		elif [[ ${OS} == 'arch' ]]; then
+			pacman -Rs --noconfirm wireguard-tools qrencode
 		fi
-		dnf autoremove -y
-	elif [[ ${OS} == 'centos' ]]; then
-		yum -y remove kmod-wireguard wireguard-tools qrencode
-		yum -y autoremove
-	elif [[ ${OS} == 'arch' ]]; then
-		pacman -Rs --noconfirm wireguard-tools qrencode
-	fi
 
-	rm -rf /etc/wireguard
-	rm -f /etc/sysctl.d/wg.conf
+		rm -rf /etc/wireguard
+		rm -f /etc/sysctl.d/wg.conf
 
-	# Reload sysctl
-	sysctl --system
+		# Reload sysctl
+		sysctl --system
 
-	# Check if WireGuard is running
-	systemctl is-active --quiet "wg-quick@${SERVER_WG_NIC}"
-	WG_RUNNING=$?
+		# Check if WireGuard is running
+		systemctl is-active --quiet "wg-quick@${SERVER_WG_NIC}"
+		WG_RUNNING=$?
 
-	if [[ ${WG_RUNNING} -eq 0 ]]; then
-		echo "WireGuard failed to uninstall properly."
-		exit 1
+		if [[ ${WG_RUNNING} -eq 0 ]]; then
+			echo "WireGuard failed to uninstall properly."
+			exit 1
+		else
+			echo "WireGuard uninstalled successfully."
+			exit 0
+		fi
 	else
-		echo "WireGuard uninstalled successfully."
-		exit 0
+		echo ""
+		echo "Removal aborted!"
 	fi
 }
 
